@@ -47,6 +47,8 @@ jobs:
 
       - name: Build for preview
         if: github.event.action != 'closed'
+        env:
+          VITE_PREVIEW_MODE: 'true'
         run: npx vite build --base /${{ github.event.repository.name }}/pr-preview/pr-${{ github.event.pull_request.number }}/
 
       - name: Inject preview banner
