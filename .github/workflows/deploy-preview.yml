@@ -66,7 +66,7 @@ jobs:
         if: github.event.action != 'closed'
         run: |
           # Add preview banner
-          sed -i 's|<body>|<body><div style="background:#06c;color:#fff;padding:8px 16px;text-align:center;font-family:RedHatText,sans-serif;font-size:14px;position:sticky;top:0;z-index:9999">Deploy Preview — Backend API is not available in this environment</div>|' dist/index.html
+          sed -i 's|<body>|<body><div id="preview-banner" style="background:#06c;color:#fff;padding:6px 16px;text-align:center;font-family:RedHatText,sans-serif;font-size:13px;position:relative;z-index:0">Deploy Preview — Backend API is not available in this environment</div>|' dist/index.html
           # Add SPA redirect receiver — restores the original path from 404.html redirect
           sed -i 's|<head>|<head><script>(function(){var p=new URLSearchParams(window.location.search).get("p");if(p){window.history.replaceState(null,"",window.location.pathname.replace(/\\/$/,"")+p+window.location.hash);}})();</script>|' dist/index.html
 
