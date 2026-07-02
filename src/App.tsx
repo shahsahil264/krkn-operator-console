@@ -358,8 +358,13 @@ function App() {
               alt="Krkn Logo"
               style={{ height: '32px', width: 'auto' }}
             />
-            <div style={{ fontSize: '1.25rem', fontWeight: 'bold', color: 'white' }}>
-              Krkn Operator Console
+            <div>
+              <div style={{ fontSize: '1.25rem', fontWeight: 'bold', color: 'white', lineHeight: 1.2 }}>
+                Krkn Operator Console
+              </div>
+              <div style={{ fontSize: '0.7rem', color: 'rgba(255,255,255,0.7)', letterSpacing: '0.05em' }}>
+                Chaos Engineering Platform
+              </div>
             </div>
           </div>
         </MastheadBrand>
