@@ -11,13 +11,13 @@ async function enablePreviewMode() {
   if (!import.meta.env.VITE_PREVIEW_MODE) return;
 
   sessionStorage.setItem('jwt_token', 'mock-preview-jwt-token');
-  sessionStorage.setItem('user_id', 'admin@preview.local');
-  sessionStorage.setItem('role', 'admin');
-  sessionStorage.setItem('name', 'Preview');
-  sessionStorage.setItem('surname', 'User');
-  sessionStorage.setItem('organization', 'Krkn');
+  sessionStorage.setItem('user_email', 'admin@preview.local');
+  sessionStorage.setItem('user_role', 'admin');
+  sessionStorage.setItem('user_name', 'Preview');
+  sessionStorage.setItem('user_surname', 'User');
+  sessionStorage.setItem('user_organization', 'Krkn');
   sessionStorage.setItem(
-    'jwt_expiry',
+    'token_expires_at',
     new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
   );
 
