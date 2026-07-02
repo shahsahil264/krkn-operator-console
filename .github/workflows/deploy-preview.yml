@@ -20,7 +20,6 @@ jobs:
     runs-on: ubuntu-24.04
     environment:
       name: github-pages
-      url: ${{ steps.deploy.outputs.page_url }}pr-preview/pr-${{ github.event.pull_request.number }}/
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -68,68 +67,67 @@ jobs:
         run: |
           sed -i 's|<body>|<body><div style="background:#06c;color:#fff;padding:8px 16px;text-align:center;font-family:RedHatText,sans-serif;font-size:14px;position:sticky;top:0;z-index:9999">Deploy Preview — Backend API is not available in this environment</div>|' dist/index.html
 
-      - name: Fetch existing previews from gh-pages
+      - name: Assemble site
         run: |
+          # Fetch existing previews from gh-pages
           git fetch origin gh-pages:gh-pages 2>/dev/null || true
-          mkdir -p _site
+          mkdir -p /tmp/site/pr-preview
           if git show gh-pages:pr-preview 2>/dev/null; then
-            git worktree add _ghpages gh-pages 2>/dev/null || true
-            cp -r _ghpages/pr-preview _site/pr-preview 2>/dev/null || true
-            cp _ghpages/index.html _site/index.html 2>/dev/null || true
-            cp _ghpages/.nojekyll _site/.nojekyll 2>/dev/null || true
-            git worktree remove _ghpages --force 2>/dev/null || true
+            cd /tmp && git clone --branch gh-pages --single-branch --depth 1 \
+              https://github.com/${{ github.repository }}.git ghpages 2>/dev/null || true
+            cp -r /tmp/ghpages/pr-preview/* /tmp/site/pr-preview/ 2>/dev/null || true
+            cp /tmp/ghpages/index.html /tmp/site/ 2>/dev/null || true
           fi
-          mkdir -p _site/pr-preview
 
-      - name: Add or remove preview
-        run: |
+          # Add or remove this PR's preview
           PR_NUM=${{ github.event.pull_request.number }}
           if [ "${{ github.event.action }}" = "closed" ]; then
-            rm -rf "_site/pr-preview/pr-${PR_NUM}"
+            rm -rf "/tmp/site/pr-preview/pr-${PR_NUM}"
           else
-            rm -rf "_site/pr-preview/pr-${PR_NUM}"
-            cp -r dist "_site/pr-preview/pr-${PR_NUM}"
-          fi
-          touch _site/.nojekyll
-          if [ ! -f _site/index.html ]; then
-            echo '<html><body>Deploy previews are served from subdirectories.</body></html>' > _site/index.html
+            rm -rf "/tmp/site/pr-preview/pr-${PR_NUM}"
+            cp -r ${{ github.workspace }}/dist "/tmp/site/pr-preview/pr-${PR_NUM}"
           fi
 
-      - name: Update gh-pages branch
+          touch /tmp/site/.nojekyll
+          if [ ! -f /tmp/site/index.html ]; then
+            echo '<html><body>Deploy previews are served from subdirectories.</body></html>' > /tmp/site/index.html
+          fi
+
+      - name: Upload pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: /tmp/site
+
+      - name: Deploy to GitHub Pages
+        id: deploy
+        uses: actions/deploy-pages@v4
+
+      - name: Sync to gh-pages branch
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           PR_NUM=${{ github.event.pull_request.number }}
           ACTION="${{ github.event.action }}"
-          TEMP_DIR=$(mktemp -d)
-          cp -r _site/* "$TEMP_DIR/" 2>/dev/null || true
-          cp _site/.nojekyll "$TEMP_DIR/" 2>/dev/null || true
-          if git show-ref --verify --quiet refs/heads/gh-pages; then
-            git checkout gh-pages
+
+          # Clone gh-pages into temp dir
+          TEMP=$(mktemp -d)
+          if git ls-remote --heads origin gh-pages | grep -q gh-pages; then
+            git clone --branch gh-pages --single-branch --depth 1 \
+              https://github.com/${{ github.repository }}.git "$TEMP"
           else
-            git checkout --orphan gh-pages
-            git rm -rf . 2>/dev/null || true
+            cd "$TEMP" && git init && git checkout -b gh-pages
           fi
-          rm -rf pr-preview index.html .nojekyll
-          cp -r "$TEMP_DIR/"* . 2>/dev/null || true
-          cp "$TEMP_DIR/.nojekyll" . 2>/dev/null || true
+
+          cd "$TEMP"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          cp -r /tmp/site/* . 2>/dev/null || true
+          cp /tmp/site/.nojekyll . 2>/dev/null || true
           git add -A
-          if [ "$ACTION" = "closed" ]; then
-            git commit -m "Remove preview for PR #${PR_NUM}" --allow-empty
-          else
-            git commit -m "Deploy preview for PR #${PR_NUM}" --allow-empty
-          fi
-          git push origin gh-pages --force
-          git checkout - 2>/dev/null || true
-
-      - name: Upload pages artifact
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: _site
-
-      - name: Deploy to GitHub Pages
-        id: deploy
-        uses: actions/deploy-pages@v4
+          MSG="Deploy preview for PR #${PR_NUM}"
+          [ "$ACTION" = "closed" ] && MSG="Remove preview for PR #${PR_NUM}"
+          git diff --staged --quiet || git commit -m "$MSG"
+          git push origin gh-pages 2>/dev/null || true
 
       - name: Comment on PR
         if: github.event.action != 'closed'
@@ -137,8 +135,6 @@ jobs:
         with:
           script: |
             const prNumber = context.payload.pull_request.number;
-            const repo = context.payload.repository.name;
-            const owner = context.payload.repository.owner.login;
             const sha = context.payload.pull_request.head.sha.substring(0, 7);
             const baseUrl = '${{ steps.deploy.outputs.page_url }}';
             const previewUrl = `${baseUrl}pr-preview/pr-${prNumber}/`;
