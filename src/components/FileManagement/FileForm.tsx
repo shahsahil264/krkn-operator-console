@@ -127,6 +127,7 @@ export function FileForm({
     }
 
     loadFile();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- initialData is a prop object; using initialData?.name to avoid re-fetching on reference changes
   }, [mode, initialData?.name]);
 
   // Load available groups

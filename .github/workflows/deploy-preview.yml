@@ -1,0 +1,209 @@
+name: Deploy Preview
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, closed]
+
+concurrency:
+  group: deploy-preview
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+  statuses: write
+  pages: write
+  id-token: write
+
+jobs:
+  deploy-preview:
+    runs-on: ubuntu-24.04
+    environment:
+      name: github-pages
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        if: github.event.action != 'closed'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Cache node_modules
+        if: github.event.action != 'closed'
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: node_modules
+          key: node-modules-${{ hashFiles('package-lock.json') }}
+
+      - name: Install dependencies
+        if: github.event.action != 'closed' && steps.cache.outputs.cache-hit != 'true'
+        run: npm ci
+
+      - name: Set deploy status to pending
+        if: github.event.action != 'closed'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.repos.createCommitStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              sha: context.payload.pull_request.head.sha,
+              state: 'pending',
+              context: 'Deploy Preview',
+              description: 'Building preview...',
+            });
+
+      - name: Build for preview
+        if: github.event.action != 'closed'
+        env:
+          VITE_PREVIEW_MODE: 'true'
+        run: npx vite build --base /${{ github.event.repository.name }}/pr-preview/pr-${{ github.event.pull_request.number }}/
+
+      - name: Inject preview banner and SPA redirect
+        if: github.event.action != 'closed'
+        run: |
+          # Add preview banner + CSS overrides for fixed-position elements that assume masthead starts at top:0
+          sed -i 's|</head>|<style>.quake-terminal-trigger{top:100px!important}.quake-terminal-backdrop{top:118px!important}.quake-terminal-panel{top:118px!important}.pf-v5-c-page__main{padding-top:38px!important}</style></head>|' dist/index.html
+          sed -i 's|<body>|<body><div id="preview-banner" style="background:#06c;color:#fff;padding:6px 16px;text-align:center;font-family:RedHatText,sans-serif;font-size:13px;position:relative;z-index:0">Deploy Preview — Backend API is not available in this environment</div>|' dist/index.html
+          # Add SPA redirect receiver — restores the original path from 404.html redirect
+          sed -i 's|<head>|<head><script>(function(){var p=new URLSearchParams(window.location.search).get("p");if(p){window.history.replaceState(null,"",window.location.pathname.replace(/\\/$/,"")+p+window.location.hash);}})();</script>|' dist/index.html
+
+      - name: Assemble site
+        run: |
+          # Fetch existing previews from gh-pages
+          git fetch origin gh-pages:gh-pages 2>/dev/null || true
+          mkdir -p /tmp/site/pr-preview
+          if git show gh-pages:pr-preview 2>/dev/null; then
+            cd /tmp && git clone --branch gh-pages --single-branch --depth 1 \
+              https://github.com/${{ github.repository }}.git ghpages 2>/dev/null || true
+            cp -r /tmp/ghpages/pr-preview/* /tmp/site/pr-preview/ 2>/dev/null || true
+            cp /tmp/ghpages/index.html /tmp/site/ 2>/dev/null || true
+          fi
+
+          # Add or remove this PR's preview
+          PR_NUM=${{ github.event.pull_request.number }}
+          if [ "${{ github.event.action }}" = "closed" ]; then
+            rm -rf "/tmp/site/pr-preview/pr-${PR_NUM}"
+          else
+            rm -rf "/tmp/site/pr-preview/pr-${PR_NUM}"
+            cp -r ${{ github.workspace }}/dist "/tmp/site/pr-preview/pr-${PR_NUM}"
+          fi
+
+          touch /tmp/site/.nojekyll
+          if [ ! -f /tmp/site/index.html ]; then
+            echo '<html><body>Deploy previews are served from subdirectories.</body></html>' > /tmp/site/index.html
+          fi
+
+          # SPA 404 redirect — captures the path and redirects to the PR preview's index.html
+          cat > /tmp/site/404.html << 'SPAEOF'
+          <!DOCTYPE html><html><head><script>
+          var seg = window.location.pathname.match(/^(\/[^/]+\/pr-preview\/pr-\d+\/)/);
+          if (seg) { var rest = window.location.pathname.slice(seg[1].length);
+            window.location.replace(seg[1] + '?p=/' + rest + window.location.hash);
+          }
+          </script></head><body></body></html>
+          SPAEOF
+
+      - name: Upload pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: /tmp/site
+
+      - name: Deploy to GitHub Pages
+        id: deploy
+        uses: actions/deploy-pages@v4
+
+      - name: Sync to gh-pages branch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          PR_NUM=${{ github.event.pull_request.number }}
+          ACTION="${{ github.event.action }}"
+
+          # Clone gh-pages into temp dir
+          TEMP=$(mktemp -d)
+          if git ls-remote --heads origin gh-pages | grep -q gh-pages; then
+            git clone --branch gh-pages --single-branch --depth 1 \
+              https://github.com/${{ github.repository }}.git "$TEMP"
+          else
+            cd "$TEMP" && git init && git checkout -b gh-pages
+          fi
+
+          cd "$TEMP"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          cp -r /tmp/site/* . 2>/dev/null || true
+          cp /tmp/site/.nojekyll . 2>/dev/null || true
+          git add -A
+          MSG="Deploy preview for PR #${PR_NUM}"
+          [ "$ACTION" = "closed" ] && MSG="Remove preview for PR #${PR_NUM}"
+          git diff --staged --quiet || git commit -m "$MSG"
+          git push origin gh-pages 2>/dev/null || true
+
+      - name: Comment on PR
+        if: github.event.action != 'closed'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const prNumber = context.payload.pull_request.number;
+            const sha = context.payload.pull_request.head.sha.substring(0, 7);
+            const baseUrl = '${{ steps.deploy.outputs.page_url }}';
+            const previewUrl = `${baseUrl}pr-preview/pr-${prNumber}/`;
+
+            const body = [
+              '<!-- deploy-preview -->',
+              `**Deploy Preview** | [View Preview](${previewUrl})`,
+              `--- | ---`,
+              `Commit | \`${sha}\``,
+              `Status | Deployed`,
+              ``,
+              `> *Static preview with mock data — no backend required.*`,
+            ].join('\n');
+
+            const marker = '<!-- deploy-preview -->';
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNumber,
+            });
+
+            const existing = comments.find(c =>
+              c.user.login === 'github-actions[bot]' && c.body.includes(marker)
+            );
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: prNumber,
+                body,
+              });
+            }
+
+      - name: Set deploy status to ready
+        if: github.event.action != 'closed'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const prNumber = context.payload.pull_request.number;
+            const baseUrl = '${{ steps.deploy.outputs.page_url }}';
+            const previewUrl = `${baseUrl}pr-preview/pr-${prNumber}/`;
+            await github.rest.repos.createCommitStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              sha: context.payload.pull_request.head.sha,
+              state: 'success',
+              target_url: previewUrl,
+              context: 'Deploy Preview',
+              description: 'Preview is ready!',
+            });
