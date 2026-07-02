@@ -5,17 +5,22 @@ on:
     types: [opened, synchronize, reopened, closed]
 
 concurrency:
-  group: preview-${{ github.ref }}
-  cancel-in-progress: true
+  group: deploy-preview
+  cancel-in-progress: false
 
 permissions:
   contents: write
   pull-requests: write
   statuses: write
+  pages: write
+  id-token: write
 
 jobs:
   deploy-preview:
     runs-on: ubuntu-24.04
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}pr-preview/pr-${{ github.event.pull_request.number }}/
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -63,23 +68,134 @@ jobs:
         run: |
           sed -i 's|<body>|<body><div style="background:#06c;color:#fff;padding:8px 16px;text-align:center;font-family:RedHatText,sans-serif;font-size:14px;position:sticky;top:0;z-index:9999">Deploy Preview — Backend API is not available in this environment</div>|' dist/index.html
 
-      - name: Deploy preview
-        uses: rossjrw/pr-preview-action@v1
-        id: preview
+      - name: Fetch existing previews from gh-pages
+        run: |
+          git fetch origin gh-pages:gh-pages 2>/dev/null || true
+          mkdir -p _site
+          if git show gh-pages:pr-preview 2>/dev/null; then
+            git worktree add _ghpages gh-pages 2>/dev/null || true
+            cp -r _ghpages/pr-preview _site/pr-preview 2>/dev/null || true
+            cp _ghpages/index.html _site/index.html 2>/dev/null || true
+            cp _ghpages/.nojekyll _site/.nojekyll 2>/dev/null || true
+            git worktree remove _ghpages --force 2>/dev/null || true
+          fi
+          mkdir -p _site/pr-preview
+
+      - name: Add or remove preview
+        run: |
+          PR_NUM=${{ github.event.pull_request.number }}
+          if [ "${{ github.event.action }}" = "closed" ]; then
+            rm -rf "_site/pr-preview/pr-${PR_NUM}"
+          else
+            rm -rf "_site/pr-preview/pr-${PR_NUM}"
+            cp -r dist "_site/pr-preview/pr-${PR_NUM}"
+          fi
+          touch _site/.nojekyll
+          if [ ! -f _site/index.html ]; then
+            echo '<html><body>Deploy previews are served from subdirectories.</body></html>' > _site/index.html
+          fi
+
+      - name: Update gh-pages branch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          PR_NUM=${{ github.event.pull_request.number }}
+          ACTION="${{ github.event.action }}"
+          TEMP_DIR=$(mktemp -d)
+          cp -r _site/* "$TEMP_DIR/" 2>/dev/null || true
+          cp _site/.nojekyll "$TEMP_DIR/" 2>/dev/null || true
+          if git show-ref --verify --quiet refs/heads/gh-pages; then
+            git checkout gh-pages
+          else
+            git checkout --orphan gh-pages
+            git rm -rf . 2>/dev/null || true
+          fi
+          rm -rf pr-preview index.html .nojekyll
+          cp -r "$TEMP_DIR/"* . 2>/dev/null || true
+          cp "$TEMP_DIR/.nojekyll" . 2>/dev/null || true
+          git add -A
+          if [ "$ACTION" = "closed" ]; then
+            git commit -m "Remove preview for PR #${PR_NUM}" --allow-empty
+          else
+            git commit -m "Deploy preview for PR #${PR_NUM}" --allow-empty
+          fi
+          git push origin gh-pages --force
+          git checkout - 2>/dev/null || true
+
+      - name: Upload pages artifact
+        uses: actions/upload-pages-artifact@v3
         with:
-          source-dir: ./dist/
+          path: _site
+
+      - name: Deploy to GitHub Pages
+        id: deploy
+        uses: actions/deploy-pages@v4
+
+      - name: Comment on PR
+        if: github.event.action != 'closed'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const prNumber = context.payload.pull_request.number;
+            const repo = context.payload.repository.name;
+            const owner = context.payload.repository.owner.login;
+            const sha = context.payload.pull_request.head.sha.substring(0, 7);
+            const baseUrl = '${{ steps.deploy.outputs.page_url }}';
+            const previewUrl = `${baseUrl}pr-preview/pr-${prNumber}/`;
+
+            const body = [
+              '### Deploy Preview',
+              '',
+              '| Name | Detail |',
+              '|------|--------|',
+              `| **Preview URL** | [${previewUrl}](${previewUrl}) |`,
+              `| **Latest commit** | \`${sha}\` |`,
+              `| **Status** | Ready |`,
+              '',
+              '> This is a static preview — API-dependent features use mock data.',
+            ].join('\n');
+
+            const marker = '### Deploy Preview';
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNumber,
+            });
+
+            const existing = comments.find(c =>
+              c.user.login === 'github-actions[bot]' && c.body.includes(marker)
+            );
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: prNumber,
+                body,
+              });
+            }
 
       - name: Set deploy status to ready
         if: github.event.action != 'closed'
         uses: actions/github-script@v7
         with:
           script: |
+            const prNumber = context.payload.pull_request.number;
+            const baseUrl = '${{ steps.deploy.outputs.page_url }}';
+            const previewUrl = `${baseUrl}pr-preview/pr-${prNumber}/`;
             await github.rest.repos.createCommitStatus({
               owner: context.repo.owner,
               repo: context.repo.repo,
               sha: context.payload.pull_request.head.sha,
               state: 'success',
-              target_url: '${{ steps.preview.outputs.preview-url }}',
+              target_url: previewUrl,
               context: 'Deploy Preview',
               description: 'Preview is ready!',
             });
