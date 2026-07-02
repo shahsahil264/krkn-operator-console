@@ -361,6 +361,9 @@ function App() {
             <div style={{ fontSize: '1.25rem', fontWeight: 'bold', color: 'white' }}>
               Krkn Operator Console
             </div>
+            <span style={{ background: '#06c', color: '#fff', padding: '2px 10px', borderRadius: '12px', fontSize: '0.75rem', fontWeight: 600 }}>
+              v0.1.0-preview
+            </span>
           </div>
         </MastheadBrand>
       </MastheadMain>
