@@ -25,10 +25,17 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-          cache: 'npm'
+
+      - name: Cache node_modules
+        if: github.event.action != 'closed'
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: node_modules
+          key: node-modules-${{ hashFiles('package-lock.json') }}
 
       - name: Install dependencies
-        if: github.event.action != 'closed'
+        if: github.event.action != 'closed' && steps.cache.outputs.cache-hit != 'true'
         run: npm ci
 
       - name: Set deploy status to pending
